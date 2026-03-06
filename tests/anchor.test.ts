@@ -1,34 +1,74 @@
-// No imports needed: web3, anchor, pg and more are globally available
+describe("Pruebas de Lista de Tareas (CRUD)", () => {
+  // Derivamos la PDA que se usará en todos los tests
+  const [listaPDA] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("lista_tareas"), pg.wallet.publicKey.toBuffer()],
+    pg.program.programId
+  );
 
-describe("Test", () => {
-  it("initialize", async () => {
-    // Generate keypair for the new account
-    const newAccountKp = new web3.Keypair();
+  it("1. Inicializa la lista de tareas", async () => {
+    // Verificamos si la cuenta ya existe para evitar errores en múltiples ejecuciones de prueba
+    const cuentaExistente = await pg.connection.getAccountInfo(listaPDA);
+    
+    if (!cuentaExistente) {
+      await pg.program.methods
+        .crearLista("Mi Lista de Certificación")
+        .accounts({
+          owner: pg.wallet.publicKey,
+          lista: listaPDA,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .rpc();
+    }
+    
+    const lista = await pg.program.account.listaTareas.fetch(listaPDA);
+    assert(lista.nombre === "Mi Lista de Certificación" || cuentaExistente, "El nombre de la lista no coincide");
+  });
 
-    // Send transaction
-    const data = new BN(42);
-    const txHash = await pg.program.methods
-      .initialize(data)
+  it("2. Agrega una tarea nueva", async () => {
+    await pg.program.methods
+      .agregarTarea("Aprender Anchor", 1)
       .accounts({
-        newAccount: newAccountKp.publicKey,
-        signer: pg.wallet.publicKey,
-        systemProgram: web3.SystemProgram.programId,
+        owner: pg.wallet.publicKey,
+        lista: listaPDA,
       })
-      .signers([newAccountKp])
       .rpc();
-    console.log(`Use 'solana confirm -v ${txHash}' to see the logs`);
 
-    // Confirm transaction
-    await pg.connection.confirmTransaction(txHash);
+    const lista = await pg.program.account.listaTareas.fetch(listaPDA);
+    const tarea = lista.tareas.find(t => t.descripcion === "Aprender Anchor");
+    
+    assert(tarea !== undefined, "La tarea no se agregó correctamente");
+    assert(tarea.prioridad === 1, "La prioridad es incorrecta");
+    assert(tarea.completada === false, "La tarea debería estar pendiente");
+  });
 
-    // Fetch the created account
-    const newAccount = await pg.program.account.newAccount.fetch(
-      newAccountKp.publicKey
-    );
+  it("3. Actualiza el estado de una tarea", async () => {
+    await pg.program.methods
+      .actualizarTarea("Aprender Anchor", 5, true) // Nueva prioridad 5, completada true
+      .accounts({
+        owner: pg.wallet.publicKey,
+        lista: listaPDA,
+      })
+      .rpc();
 
-    console.log("On-chain data is:", newAccount.data.toString());
+    const lista = await pg.program.account.listaTareas.fetch(listaPDA);
+    const tarea = lista.tareas.find(t => t.descripcion === "Aprender Anchor");
+    
+    assert(tarea.prioridad === 5, "La prioridad no se actualizó");
+    assert(tarea.completada === true, "El estado completado no se actualizó");
+  });
 
-    // Check whether the data on-chain is equal to local 'data'
-    assert(data.eq(newAccount.data));
+  it("4. Elimina una tarea", async () => {
+    await pg.program.methods
+      .eliminarTarea("Aprender Anchor")
+      .accounts({
+        owner: pg.wallet.publicKey,
+        lista: listaPDA,
+      })
+      .rpc();
+
+    const lista = await pg.program.account.listaTareas.fetch(listaPDA);
+    const tarea = lista.tareas.find(t => t.descripcion === "Aprender Anchor");
+    
+    assert(tarea === undefined, "La tarea no fue eliminada");
   });
 });
